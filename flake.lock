@@ -1,0 +1,28 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1704001581,
+        "narHash": "sha256-6ofpNmQNA1pAgJfUHji0horuVH4uDy6KcxVN4Igw3r8=",
+        "ref": "refs/heads/cl-autowrap-libffi-master",
+        "rev": "5ecad3814f2cc95055bcd0933a736c19f8356935",
+        "revCount": 564565,
+        "type": "git",
+        "url": "file:///home/robert/proj/nixpkgs"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-23.11",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

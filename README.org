@@ -1,0 +1,43 @@
+#+title: RobStat
+
+* Idea
+
+A scriptable alternative to i3status. Basically it's a neat idea but
+it's too hard to add, for example, VPN status - I'd need to patch
+i3status basically. Instead, let's write status lines in a more
+scriptable environment.
+
+* Goal
+
+(status
+  (item "W: ~a" (wifi))
+  (color (battery-color)
+    (item "BAT ~a ~a" (battery-percent) (battery-time)))
+  (disk-free "/")
+  (system-load-1min)
+  (item "~a | ~a" (memory-used) (memory-available))
+  (if (volume-muted)
+      (item "~a%" (volume))
+      (color 'green
+              (item "Muted (~a%)" (volume))))
+  (local-time:format-timestring
+    nil (local-time:now)
+    :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
+              (:day 2) #\  (:hour 2) #\: (:min 2))))
+
+* Impl
+
+Status info should be memoized so that checking e.g. the color of the battery prompt doesn't re-query procfs.
+
+* Etc
+
+sbcl manual GC's? minutely maybe? I'm kind of assuming, currently
+baselessly, that I'll have a problem with the status program slowly
+growing its heap not-quite-leaking memory. Not really an issue of big
+concern rn.
+
+How does i3status wait for volume changes? they send SIGUSR1 to the main thread to interrupt the sleep, of course!
+
+CL's format doesn't have color escape code support, does it? even if it does it wouldn't be helpful for this, given I want
+
+* 
