@@ -20,12 +20,12 @@
     },
     "nixpkgs": {
       "locked": {
-        "dirtyRev": "5ecad3814f2cc95055bcd0933a736c19f8356935-dirty",
-        "dirtyShortRev": "5ecad3814f2c-dirty",
-        "lastModified": 1704001581,
-        "narHash": "sha256-JC6nu2AfQqtFNmntL47Bj6g4Nm+m0zNLk1iNWbmPLxA=",
-        "type": "git",
-        "url": "file:///home/robert/proj/nixpkgs"
+        "lastModified": 1704362723,
+        "narHash": "sha256-rz5ZUfxO5wr2K0sXsRsrozWCXv5DmkaZVBmU1BZfBp4=",
+        "owner": "robgssp",
+        "repo": "nixpkgs",
+        "rev": "bfb56607269c31348ae80933addec40a5bf6c6a8",
+        "type": "github"
       },
       "original": {
         "owner": "NixOS",
