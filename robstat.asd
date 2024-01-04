@@ -5,6 +5,7 @@
   :license "MIT"
   :depends-on (:yason :local-time :alexandria :trivia :dbus :cl-autowrap/libffi)
   :serial t
+  :entry-point "robstat:main"
   :components
   ((:file "package")
    (:file "autowrap")
