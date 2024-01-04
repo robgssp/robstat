@@ -13,6 +13,9 @@
 
 (defvar *dbus*)
 
+(defvar *status-condition* (bt2:make-condition-variable))
+(defvar *status-lock* (bt2:make-lock))
+
 (defmacro status (&rest args)
   "Output the given status items on a timer.
 
@@ -31,7 +34,8 @@
                                (format *error-output* "Error with item ~a: ~a" ',arg v)
                                (item "<error>" :color :red))))
                       args))
-           (sleep 5))))))
+           (bt2:with-lock-held (*status-lock*)
+             (bt2:condition-wait *status-condition* *status-lock* :timeout 5)))))))
 
 (defmacro status-once (&rest args)
   `(dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
@@ -350,53 +354,56 @@
 
 ;;;; Volume
 
+(defmacro acheck (func)
+  (with-gensyms (ret)
+    `(let ((,ret ,func))
+       (if (>= ,ret 0)
+           ,ret
+           (error "~a failed with ~a" ',(first func) ,ret)))))
+
 ;;; -> '(:volume [0-1] :muted bool)
 (defun volume-level ()
   (memoize-status ()
-    (macrolet
-        ((acheck (func)
-           (with-gensyms (ret)
-             `(let ((,ret ,func))
-                (if (>= ,ret 0)
-                    ,ret
-                    (error "~a failed with ~a" ',(first func) ,ret))))))
-      (cffi:with-foreign-strings ((master "Master")
-                                  (card "default"))
-        (c-with ((mixid (:pointer snd-mixer-selem-id-t))
-                 (handle (:pointer snd-mixer-t))
-                 (minv :long)
-                 (maxv :long)
-                 (vol :long)
-                 (muted :int))
-          (acheck (snd-mixer-open (handle &) 0))
-          (unwind-protect
-               (progn
-                 (acheck (snd-mixer-attach handle card))
-                 (acheck (snd-mixer-selem-register handle nil nil))
-                 (acheck (snd-mixer-load handle))
+    (cffi:with-foreign-strings ((master "Master")
+                                (card "default"))
+      (c-with ((mixid (:pointer snd-mixer-selem-id-t))
+               (handle (:pointer snd-mixer-t))
+               (minv :long)
+               (maxv :long)
+               (vol :long)
+               (muted :int))
+        (acheck (snd-mixer-open (handle &) 0))
+        (unwind-protect
+             (progn
+               (acheck (snd-mixer-attach handle card))
+               (acheck (snd-mixer-selem-register handle nil nil))
+               (acheck (snd-mixer-load handle))
 
-                 (acheck (snd-mixer-selem-id-malloc (mixid &)))
-                 (unwind-protect
-                      (progn
-                        (snd-mixer-selem-id-set-index mixid 0)
-                        (snd-mixer-selem-id-set-name mixid master)
-                        (let ((elem (snd-mixer-find-selem handle mixid)))
-                          (unless (null elem)
-                            (snd-mixer-selem-get-playback-volume-range
-                             elem
-                             (minv &)
-                             (maxv &))
-                            (snd-mixer-selem-get-playback-volume
-                             elem 0
-                             (vol &))
-                            (snd-mixer-selem-get-playback-switch
-                             elem 0
-                             (muted &))
+               (acheck (snd-mixer-selem-id-malloc (mixid &)))
+               (unwind-protect
+                    (progn
+                      (snd-mixer-selem-id-set-index mixid 0)
+                      (snd-mixer-selem-id-set-name mixid master)
+                      (let ((elem (snd-mixer-find-selem handle mixid)))
+                        (unless (null elem)
+                          (acheck
+                           (snd-mixer-selem-get-playback-volume-range
+                            elem
+                            (minv &)
+                            (maxv &)))
+                          (acheck
+                           (snd-mixer-selem-get-playback-volume
+                            elem 0
+                            (vol &)))
+                          (acheck
+                           (snd-mixer-selem-get-playback-switch
+                            elem 0
+                            (muted &)))
 
-                            (list :volume (/ (- vol minv 0.0) (- maxv minv))
-                                  :muted (= muted 0)))))
-                   (snd-mixer-selem-id-free mixid)))
-            (snd-mixer-close handle)))))))
+                          (list :volume (/ (- vol minv 0.0) (- maxv minv))
+                                :muted (= muted 0)))))
+                 (snd-mixer-selem-id-free mixid)))
+          (snd-mixer-close handle))))))
 
 (defun volume ()
   (let-match* (((plist :volume vol :muted muted) (volume-level))
@@ -404,6 +411,31 @@
     (if muted
         (item (fmt "Muted ~d%" pvol) :color :yellow)
         (item (fmt "~d%" pvol)))))
+
+;; (autowrap:defcallback mixer-event :int ((mixer (:pointer snd-mixer-t))
+;;                                         (mask :unsigned-int)
+;;                                         (elem (:pointer snd-mixer-elem-t)))
+;;   (declare (ignore mixer mask elem))
+;;   (format t "Received event~%")
+;;   0)
+
+(defun listen-volume ()
+  (cffi:with-foreign-string (card "default")
+    (c-with ((handle (:pointer snd-mixer-t)))
+      (acheck (snd-mixer-open (handle &) 0))
+      (unwind-protect
+           (progn
+             (acheck (snd-mixer-attach handle card))
+             (acheck (snd-mixer-selem-register handle nil nil))
+             ;; (snd-mixer-set-callback handle (autowrap:callback 'mixer-event))
+             (acheck (snd-mixer-load handle))
+             (format *error-output* "Volume thread listening...~%")
+             (loop
+              (progn
+                (snd-mixer-wait handle -1)
+                (snd-mixer-handle-events handle)
+                (bt2:condition-broadcast *status-condition*))))
+        (snd-mixer-close handle)))))
 
 ;;;; Main
 
@@ -423,18 +455,48 @@
       :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
                 (:day 2) #\  (:hour 2) #\: (:min 2))))))
 
+;; (eval-when (:load-toplevel :execute)
+;;   (let ((default-timezone-file #p"/etc/localtime"))
+;;     (handler-case
+;;         (local-time::define-timezone *default-timezone* default-timezone-file :load t)
+;;       (error (e)
+;;         (format t "Error initializing timezone: ~a~%" e)
+;;         (setf *default-timezone* local-time:+utc-zone+)))
+;;     (format t "timezone: ~a~%" *default-timezone*)))
+
 (defun main ()
-  (dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
-    (status
-     (wifi)
-     (vpn)
-     (battery)
-     (disk-free "/")
-     (system-load)
-     ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
-     (volume)
-     (local-time:format-timestring
-      nil (local-time:now)
-      :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
-                (:day 2) #\  (:hour 2) #\: (:min 2))))))
+  (let* ((*error-output* (open #p"~/.robstat.log"
+                               :direction :output
+                               :if-exists :supersede))
+         (local-time:*default-timezone*
+           (local-time::make-timezone :path #p"/etc/localtime"
+                                      :name "localtime"))
+         (bt2:*default-special-bindings*
+           (cons `(*error-output* . *error-output*)
+                 bt2:*default-special-bindings*))
+         (vol-thread (bt2:make-thread #'listen-volume :trap-conditions t)))
+    (local-time:reread-timezone-repository)
+    (format *error-output* "Robstat started~%")
+    (finish-output *error-output*)
+    (unwind-protect
+         (dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
+           (status
+            (wifi)
+            (vpn)
+            (battery)
+            (disk-free "/")
+            (system-load)
+            ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
+            (volume)
+            (local-time:format-timestring
+             nil (local-time:now)
+             :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
+                       (:day 2) #\  (:hour 2) #\: (:min 2)))))
+      (bt2:interrupt-thread
+       vol-thread
+       #'(lambda () (error "Kill thread")))
+      (handler-case (bt2:join-thread vol-thread)
+        (error (e)
+          (format *error-output* "Vol thread joined with ~a~%" e)))
+      (close *error-output*))))
 
