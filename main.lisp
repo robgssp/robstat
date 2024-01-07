@@ -485,18 +485,33 @@
            (bt2:condition-wait *status-condition* *status-lock* :timeout 5))))))
 
 (defmacro status-once (&rest args)
-  `(with-status-env ()
+  `(progn
      (clear-status-memos)
      (emit-status
       ,@(mapcar #'(lambda (arg)
                     `(handler-case ,arg
                        (error (v)
-                         (format *error-output* "Error with item ~a: ~a" ',arg v)
+                         (format *error-output* "Error with item ~a: ~a~%" ',arg v)
                          (item "<error>" :color :red))))
                 args))))
 
 (defun test ()
-  (status-once
+  (with-status-env ()
+    (status-once
+     (wifi)
+     (vpn)
+     (battery)
+     (disk-free "/")
+     (system-load)
+     ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
+     (volume)
+     (local-time:format-timestring
+      nil (local-time:now)
+      :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
+                (:day 2) #\  (:hour 2) #\: (:min 2))))))
+
+(defun main0 ()
+  (status
    (wifi)
    (vpn)
    (battery)
@@ -510,15 +525,12 @@
               (:day 2) #\  (:hour 2) #\: (:min 2)))))
 
 (defun main ()
-  (status
-   (wifi)
-   (vpn)
-   (battery)
-   (disk-free "/")
-   (system-load)
-   ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
-   (volume)
-   (local-time:format-timestring
-    nil (local-time:now)
-    :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
-              (:day 2) #\  (:hour 2) #\: (:min 2)))))
+  (let ((config-file
+          (uiop:xdg-config-pathname "robstat/stat.lisp")))
+    (if (not config-file)
+        (progn
+          (format *error-output* "File $XDG_CONFIG_HOME/robstat/stat.lisp not found, using default~%")
+          (finish-output *error-output*)
+          (main0))
+        (let ((*package* (symbol-package 'robstat-user)))
+          (load config-file)))))
