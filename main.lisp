@@ -470,6 +470,8 @@
 (defmacro with-status-env ((&key) &body body)
   `(call-with-status-env #'(lambda () ,@body)))
 
+(defvar *interval* 5 "How long to wait between updates, in seconds")
+
 (defmacro status (&rest args)
   "Output the given status items on a timer.
 
@@ -482,7 +484,8 @@
          (status-once ,@args)
          (format t ",~%")
          (bt2:with-lock-held (*status-lock*)
-           (bt2:condition-wait *status-condition* *status-lock* :timeout 5))))))
+           (bt2:condition-wait *status-condition* *status-lock*
+                               :timeout *interval*))))))
 
 (defmacro status-once (&rest args)
   `(progn
