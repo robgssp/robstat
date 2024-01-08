@@ -22,6 +22,9 @@
           buildInputs = with pkgs; [ alsa-lib c2ffi clang ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [ alsa-lib libfixposix libffi ]);
+          shellHook = ''
+            export CL_SOURCE_REGISTRY=`pwd`
+          '';
         };
       });
 }
