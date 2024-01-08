@@ -365,26 +365,28 @@
 
 ;;; -> '(:volume [0.0-1.0] :muted bool)
 (defun volume-level ()
-  (c-with ((minv :long)
-           (maxv :long)
-           (vol :long)
-           (muted :int))
-    (acheck
-     (snd-mixer-selem-get-playback-volume-range
-      *alsa-elem*
-      (minv &)
-      (maxv &)))
-    (acheck
-     (snd-mixer-selem-get-playback-volume
-      *alsa-elem* 0
-      (vol &)))
-    (acheck
-     (snd-mixer-selem-get-playback-switch
-      *alsa-elem* 0
-      (muted &)))
+  (memoize-status ()
+    (c-with ((minv :long)
+             (maxv :long)
+             (vol :long)
+             (muted :int))
+      (acheck (snd-mixer-handle-events *alsa-handle*))
+      (acheck
+       (snd-mixer-selem-get-playback-volume-range
+        *alsa-elem*
+        (minv &)
+        (maxv &)))
+      (acheck
+       (snd-mixer-selem-get-playback-volume
+        *alsa-elem* 0
+        (vol &)))
+      (acheck
+       (snd-mixer-selem-get-playback-switch
+        *alsa-elem* 0
+        (muted &)))
 
-    (list :volume (/ (- vol minv 0.0) (- maxv minv))
-          :muted (= muted 0))))
+      (list :volume (/ (- vol minv 0.0) (- maxv minv))
+            :muted (= muted 0)))))
 
 (defun volume ()
   (let-match* (((plist :volume vol :muted muted) (volume-level))
