@@ -148,8 +148,6 @@
       :white))
 
 (defun battery ()
-  (item (fmt "BAT ~a% ~a" (floor (* (battery-level) 100)) (battery-time))
-        :color (battery-color))
   (let ((level (floor (* (battery-level) 100))))
     (match (battery-status)
       ("Discharging"
