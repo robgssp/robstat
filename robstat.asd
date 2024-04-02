@@ -3,7 +3,7 @@
   :version "0.1"
   :author "Rob Glossop <robgssp@gmail.com>"
   :license "MIT"
-  :depends-on (:yason :local-time :alexandria :trivia :dbus :cl-autowrap/libffi)
+  :depends-on (:yason :local-time :alexandria :trivia :dbus :cl-autowrap/libffi :cl-ppcre)
   :serial t
   :entry-point "robstat:main"
   :components

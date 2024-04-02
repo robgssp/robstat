@@ -5,7 +5,8 @@ let
     version = "0.1";
     src = ./.;
     lispLibs = with sbcl.pkgs; [ local-time yason alexandria
-                                 trivia cl-autowrap dbus swank ];
+                                 trivia cl-autowrap dbus swank
+                                 cl-ppcre ];
     nativeLibs = [ alsa-lib ];
     nativeBuildInputs = [ c2ffi makeBinaryWrapper ];
     flags = [ "--script" ];

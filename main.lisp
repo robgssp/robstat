@@ -460,6 +460,30 @@
                          battery)))
               devices)))))
 
+;;;; Memory
+
+(defun memory-stats ()
+  (memoize-status ()
+    (mapcar (lambda (line)
+              (ppcre:register-groups-bind (name (#'parse-integer val) kb)
+                  ("^(\\S+):\\s+(\\d+)\\s?(kB)?$" line)
+                (cons name (if kb (* val 1024) val))))
+            (uiop:read-file-lines "/proc/meminfo"))))
+
+(defun memory-available ()
+  (cdr (assoc "MemAvailable" (memory-stats) :test #'equal)))
+
+(defun memory-total ()
+  (cdr (assoc "MemTotal" (memory-stats) :test #'equal)))
+
+(defun memory ()
+  (item (round-bytes (memory-available))
+        :color (if (< (/ (memory-available) (memory-total))
+                      0.1)
+                   :red
+                   :white)))
+
+
 ;;;; Top-level
 
 ;;; Only works for binding dynamic variables; lexical vars will be
@@ -552,6 +576,7 @@
      (battery)
      (disk-free "/")
      (system-load)
+     (memory)
      ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
      (volume)
      (bt)
@@ -567,6 +592,7 @@
    (battery)
    (disk-free "/")
    (system-load)
+   (memory)
    ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
    (volume)
    (local-time:format-timestring

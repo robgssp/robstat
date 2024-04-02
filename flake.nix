@@ -16,7 +16,7 @@
         devShells.default = pkgs.mkShell {
           packages = [
             (pkgs.sbcl.withPackages (pkgs: with pkgs; [
-              local-time yason alexandria trivia cl-autowrap dbus swank
+              local-time yason alexandria trivia cl-autowrap cl-ppcre dbus swank
             ]))
           ];
           buildInputs = with pkgs; [ alsa-lib c2ffi clang ];
