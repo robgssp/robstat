@@ -13,8 +13,8 @@
 
 (defvar *dbus*)
 
-(defvar *status-condition* (bt2:make-condition-variable))
-(defvar *status-lock* (bt2:make-lock))
+(defvar *status-condition*)
+(defvar *status-lock*)
 
 (defvar *memo-vars* ())
 
@@ -447,12 +447,16 @@
       (let* ((*error-output* (open #p"~/.robstat.log"
                                    :direction :output
                                    :if-exists :supersede))
+             (*status-lock* (bt2:make-lock))
+             (*status-condition* (bt2:make-condition-variable))
              (local-time:*default-timezone*
                (local-time::make-timezone :path #p"/etc/localtime"
                                           :name "localtime"))
              (bt2:*default-special-bindings*
-               (cons `(*error-output* . *error-output*)
-                     bt2:*default-special-bindings*))
+               (list* '(*error-output* . *error-output*)
+                      '(*status-lock* . *status-lock*)
+                      '(*status-condition* . *status-condition*)
+                      bt2:*default-special-bindings*))
              (vol-thread (bt2:make-thread #'listen-volume :trap-conditions t)))
         (format *error-output* "Robstat started~%")
         (finish-output *error-output*)
