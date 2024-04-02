@@ -1,7 +1,5 @@
 (in-package :robstat)
 
-(declaim (optimize (speed 0) (safety 3) (debug 3)))
-
 (defvar *colors*
   '(:white  "#FFFFFF"
     :red    "#FF0000"
@@ -68,7 +66,8 @@
 
 (defun emit-status (&rest args)
   (yason:with-output (*standard-output*)
-    (yason:encode (mapcar (compose #'to-i3bar #'ensure-item) args))))
+    (yason:encode (mapcar (compose #'to-i3bar #'ensure-item) args))
+    nil))
 
 (defun ensure-item (item-like)
   (cond ((listp item-like) item-like)
@@ -116,6 +115,7 @@
                    (error (fmt "No such stat ~a" stat)))))
 
 (defun battery-seconds ()
+  "Get the current battery life in seconds"
   (let ((stats (battery-stats)))
     (let (;; uA -> A
           (current (/ (battery-stat "POWER_SUPPLY_CURRENT_NOW" stats) 1000000.0))
@@ -128,6 +128,7 @@
         (_ (/ charge current))))))
 
 (defun battery-time ()
+  "Battery time in hours:minutes"
   (let ((sec (battery-seconds)))
     (fmt "~d:~2,'0d"
          (floor (/ sec 3600))
@@ -148,6 +149,7 @@
       :white))
 
 (defun battery ()
+  "Formatted battery status"
   (let ((level (floor (* (battery-level) 100))))
     (match (battery-status)
       ("Discharging"
@@ -164,6 +166,7 @@
 
 ;; -> (list (name type dbus-path))
 (defun connections ()
+  "Active NetworkManager connections, returned as a list of (name type dbus-path) triples."
   (memoize-status ()
     (mapcar (lambda (conn)
               (list (dbus:get-property
@@ -282,9 +285,9 @@
     (getloadavg (x &) 1)
     (x 0)))
 
-(defvar +nprocs+ (sysconf +_sc_nprocessors_onln+))
+(defvar +ncores+ (sysconf +_sc_nprocessors_onln+))
 
-(defun system-load (&key (warn +nprocs+) (advise (* +nprocs+ 0.75)))
+(defun system-load (&key (warn +ncores+) (advise (* +ncores+ 0.75)))
   (let ((load (system-load-1min)))
     (item (fmt "~,1f" load)
           :color (cond ((> load warn)
@@ -302,7 +305,7 @@
       (statvfs path info)
       (* (info :f-bavail) (info :f-bsize)))))
 
-(defun si-round (n)
+(defun round-bytes (n)
   (macrolet
       ((cases (&rest args)
          `(cond
@@ -320,7 +323,7 @@
 (defun disk-free (path)
   (let ((free-red (* 25 (ash 1 30)))
         (free (disk-free-bytes path)))
-    (item (fmt "~a: ~a" path (si-round free))
+    (item (fmt "~a: ~a" path (round-bytes free))
           :color (if (< free free-red)
                      :red
                      :white))))
@@ -365,8 +368,8 @@
     #'(lambda (,handle ,elem)
         ,@body)))
 
-;;; -> '(:volume [0.0-1.0] :muted bool)
 (defun volume-level ()
+  "Gets the master volume in (list :volume [0.0-1.0] :muted t/nil)"
   (memoize-status ()
     (c-with ((minv :long)
              (maxv :long)
@@ -424,7 +427,7 @@
 
 ;;;; Bluetooth
 
-(defun bt-devices ()
+(defun bluetooth-devices ()
   (memoize-status ()
     (let ((objs (dbus:get-managed-objects *dbus* "org.bluez" "/")))
       (flet ((property (obj interface prop)
@@ -444,8 +447,8 @@
             (property obj "org.bluez.Device1" "Connected"))
           objs))))))
 
-(defun bt ()
-  (match (bt-devices)
+(defun bluetooth ()
+  (match (bluetooth-devices)
     (nil "-")
     (devices
      (format nil "~{~a~^, ~}"
@@ -486,9 +489,9 @@
 
 ;;;; Top-level
 
-;;; Only works for binding dynamic variables; lexical vars will be
-;;; unbound since they wouldn't be set in the failure case
 (defmacro ignorable-with (with args &body body)
+  "Attempts to run (with args body); if body is never reached,
+run it without the with. Useful for optional context-building."
   `(flet ((body () ,@body))
      (let ((entered nil))
        (block outer
@@ -518,12 +521,13 @@
              (local-time:*default-timezone*
                (local-time::make-timezone :path #p"/etc/localtime"
                                           :name "localtime"))
-             (bt2:*default-special-bindings*
-               (list* '(*error-output* . *error-output*)
-                      '(*status-lock* . *status-lock*)
-                      '(*status-condition* . *status-condition*)
-                      bt2:*default-special-bindings*))
-             (vol-thread (bt2:make-thread #'listen-volume :trap-conditions t)))
+             (vol-thread
+               (bt2:make-thread #'listen-volume
+                                :trap-conditions t
+                                :initial-bindings
+                                `((*error-output* . ,*error-output*)
+                                  (*status-lock* . ,*status-lock*)
+                                  (*status-condition* . ,*status-condition*)))))
         (format *error-output* "Robstat started~%")
         (finish-output *error-output*)
         (unwind-protect
@@ -542,7 +546,7 @@
 
 (defvar *interval* 5 "How long to wait between updates, in seconds")
 
-(defmacro status (&rest args)
+(defmacro status ((&key) &body items)
   "Output the given status items on a timer.
 
    Items can be output from `item', or strings."
@@ -551,13 +555,13 @@
      (format t "[")
      (loop while t do
        (progn
-         (status-once ,@args)
+         (status-once () ,@items)
          (format t ",~%")
          (bt2:with-lock-held (*status-lock*)
            (bt2:condition-wait *status-condition* *status-lock*
                                :timeout *interval*))))))
 
-(defmacro status-once (&rest args)
+(defmacro status-once ((&key) &body items)
   `(progn
      (clear-status-memos)
      (emit-status
@@ -566,11 +570,11 @@
                        (error (v)
                          (format *error-output* "Error with item ~a: ~a~%" ',arg v)
                          (item "<error>" :color :red))))
-                args))))
+                items))))
 
 (defun test ()
   (with-status-env ()
-    (status-once
+    (status-once ()
      (wifi)
      (vpn)
      (battery)
@@ -579,14 +583,14 @@
      (memory)
      ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
      (volume)
-     (bt)
+     (bluetooth)
      (local-time:format-timestring
       nil (local-time:now)
       :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
                 (:day 2) #\  (:hour 2) #\: (:min 2))))))
 
 (defun main0 ()
-  (status
+  (status ()
    (wifi)
    (vpn)
    (battery)
