@@ -422,6 +422,44 @@
                 (bt2:condition-broadcast *status-condition*))))
         (snd-mixer-close handle)))))
 
+;;;; Bluetooth
+
+(defun bt-devices ()
+  (memoize-status ()
+    (let ((objs (dbus:get-managed-objects *dbus* "org.bluez" "/")))
+      (flet ((property (obj interface prop)
+               (second
+                (assoc prop
+                       (second
+                        (assoc interface (second obj) :test #'string=))
+                       :test #'string=))))
+        (mapcar
+         (lambda (obj)
+           (let ((name (property obj "org.bluez.Device1" "Name"))
+                 (battery (property obj "org.bluez.Battery1" "Percentage")))
+             (append (list :name name)
+                     (when battery (list :battery battery)))))
+         (remove-if-not
+          (lambda (obj)
+            (property obj "org.bluez.Device1" "Connected"))
+          objs))))))
+
+(defun bt ()
+  (match (bt-devices)
+    (nil "-")
+    (devices
+     (format nil "~{~a~^, ~}"
+             (mapcar
+              (lambda-match
+                ((plist :name name :battery nil)
+                 (format nil "~a"
+                         (subseq name 0 (min (length name) 3))))
+                ((plist :name name :battery battery)
+                 (format nil "~a ~a%"
+                         (subseq name 0 (min (length name) 3))
+                         battery)))
+              devices)))))
+
 ;;;; Top-level
 
 ;;; Only works for binding dynamic variables; lexical vars will be
@@ -514,6 +552,7 @@
      (system-load)
      ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
      (volume)
+     (bt)
      (local-time:format-timestring
       nil (local-time:now)
       :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
