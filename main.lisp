@@ -284,12 +284,14 @@
 
 (defvar +nprocs+ (sysconf +_sc_nprocessors_onln+))
 
-(defun system-load ()
+(defun system-load (&key (warn +nprocs+) (advise (* +nprocs+ 0.75)))
   (let ((load (system-load-1min)))
     (item (fmt "~,1f" load)
-          :color (if (> load +nprocs+)
-                     :red
-                     :white))))
+          :color (cond ((> load warn)
+                        :red)
+                       ((> load advise)
+                        :yellow)
+                       (t :white)))))
 
 ;;;; Disk Usage
 
