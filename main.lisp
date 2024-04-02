@@ -481,12 +481,14 @@
                       (body)))))
          (body)))))
 
-(defun call-with-status-env (f)
+(defun call-with-status-env (f &key (logfile t))
   (ignorable-with with-volume ()
     (ignorable-with dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
-      (let* ((*error-output* (open #p"~/.robstat.log"
-                                   :direction :output
-                                   :if-exists :supersede))
+      (let* ((*error-output* (if logfile
+                                 (open #p"~/.robstat.log"
+                                       :direction :output
+                                       :if-exists :supersede)
+                                 *error-output*))
              (*status-lock* (bt2:make-lock))
              (*status-condition* (bt2:make-condition-variable))
              (local-time:*default-timezone*
@@ -509,10 +511,10 @@
           (handler-case (bt2:join-thread vol-thread)
             (error (e)
               (format *error-output* "Vol thread joined with ~a~%" e)))
-          (close *error-output*))))))
+          (when logfile (close *error-output*)))))))
 
-(defmacro with-status-env ((&key) &body body)
-  `(call-with-status-env #'(lambda () ,@body)))
+(defmacro with-status-env ((&rest args) &body body)
+  `(call-with-status-env #'(lambda () ,@body) ,@args))
 
 (defvar *interval* 5 "How long to wait between updates, in seconds")
 
