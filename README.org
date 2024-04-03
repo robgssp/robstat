@@ -1,43 +1,118 @@
 #+title: RobStat
 
-* Idea
+* Overview
 
-A scriptable alternative to i3status. Basically it's a neat idea but
-it's too hard to add, for example, VPN status - I'd need to patch
-i3status basically. Instead, let's write status lines in a more
-scriptable environment.
+Robstat is a status-bar generator for use with i3/sway, written and
+configured in Lisp.
 
-* Goal
+* Usage
 
-(status
-  (item "W: ~a" (wifi))
-  (color (battery-color)
-    (item "BAT ~a ~a" (battery-percent) (battery-time)))
-  (disk-free "/")
-  (system-load-1min)
-  (item "~a | ~a" (memory-used) (memory-available))
-  (if (volume-muted)
-      (item "~a%" (volume))
-      (color 'green
-              (item "Muted (~a%)" (volume))))
-  (local-time:format-timestring
-    nil (local-time:now)
-    :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
-              (:day 2) #\  (:hour 2) #\: (:min 2))))
+Robstat is configured via =~/.config/robstat/stat.lisp=. Example:
 
-* Impl
+#+BEGIN_SRC lisp
+(status ()
+ (wifi)
+ (vpn)
+ (battery)
+ (disk-free "/")
+ (system-load)
+ (volume)
+ (bluetooth)
+ (local-time:format-timestring
+  nil (local-time:now)
+  :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
+            (:day 2) #\  (:hour 2) #\: (:min 2))))
+#+END_SRC
 
-Status info should be memoized so that checking e.g. the color of the battery prompt doesn't re-query procfs.
+~STATUS~ takes a list of function calls to run periodically,
+outputting their result in i3stat format. Items can return a bare
+string or ~'(:text "words" :color :red)~.
 
-* Etc
+** Built-in Item Formatters
 
-sbcl manual GC's? minutely maybe? I'm kind of assuming, currently
-baselessly, that I'll have a problem with the status program slowly
-growing its heap not-quite-leaking memory. Not really an issue of big
-concern rn.
+Predefined status formatters. These tend to be fairly opinionated;
+their associated queries are also exposed if you want it different.
 
-How does i3status wait for volume changes? they send SIGUSR1 to the main thread to interrupt the sleep, of course!
+- ~WIFI~
 
-CL's format doesn't have color escape code support, does it? even if it does it wouldn't be helpful for this, given I want
+  Shows current wifi connection with strength and address, per
+  NetworkManager.
 
-* 
+- ~VPN~
+
+  Shows current VPN connections, per NetworkManager.
+
+- ~BATTERY~
+
+  battery readout in "BAT 69% 3:00" / "CHG 20% 0:45" format. Turns red
+  at <30min remaining.
+
+- ~DISK-FREE~ /fs-path/
+
+  Shows free space on the fs at /fs-path/.
+
+- ~VOLUME~
+
+  Shows volume and muted-status.
+
+- ~BLUETOOTH~
+
+  Shows connected bluetooth devices, abbreviated, with battery if
+  available.
+
+  NB. bluez currently only queries battery stats with
+
+  #+BEGIN_SRC conf
+    [General]
+    Experimental=true
+  #+END_SRC
+
+  in =/etc/bluetooth/main.conf=.
+
+** State Queries
+
+- ~BATTERY-LEVEL~
+
+  Battery level in $[0.0, 1.0]$
+
+- ~BATTERY-SECONDS~
+
+  How long does the battery have left to discharge/charge, in seconds
+
+- ~BATTERY-STATUS~
+
+  Get the battery status: ~"Charging"~, ~"Discharging"~ and ~"Full"~
+  are the commonly reported ones.
+
+- ~VOLUME-LEVEL~
+
+  Gets the current master volume, as
+  ~(list :volume 0.7 :muted nil)~. Volume range is $[0.0, 1.0]$.
+
+- ~CONNECTIONS~
+
+  Active NetworkManager connections, returned as
+  ~(list '(name type dbus-path))~
+
+- ~BLUETOOTH-DEVICES~
+
+  Fetches currently connected bluetooth devices. Returned as
+  ~(list '(:name "SomeTec Headphones" [:battery 69]))~
+
+** Other Utilities
+
+- ~MEMOIZE-STATUS~ (/args/) /&body body/
+
+  Memoizes calls to /body/, keyed by /args/ (as compared by
+  ~EQUAL~). This is used on most of the builtin queries to cache their
+  results. Cleared on refresh.
+
+- ~ROUND-BYTES~ /bytes/
+
+  Rounds /bytes/ to kibi/mebi/etc.
+
+  #+BEGIN_SRC lisp
+    > (round-bytes 20480)
+    "20.0K"
+  #+END_SRC
+
