@@ -18,19 +18,20 @@
   (defun nix-includes ()
     (let* ((cflags (uiop:getenv "NIX_CFLAGS_COMPILE"))
            (split (uiop:split-string cflags :separator " ")))
-      (cons "/nix/store/mrgib0s2ayr81xv1q84xsjg8ijybalq3-glibc-2.38-27-dev/include"
+      (cons (uiop:getenv "LIBC")
             (include-flags split))))
 
   (defun gen-compile-commands ()
     (uiop:with-temporary-file (:pathname path)
       (uiop:run-program (list "clang" "-c" "test.c" "-o" "test.o"
-                              (format nil "-MJ~a" path)))))
+                              (format nil "-MJ~a" path))
+                        :error-output t)
+      (concatenate 'string "[" (uiop:read-file-string path) "]")))
 
   (defun includes-from-compile-commands ()
-    (with-open-file (file "compile_commands.json")
-      (let* ((parsed (yason:parse file :object-as :alist))
-             (args (cdr (assoc "arguments" (first parsed) :test #'equal))))
-        (include-flags args)))))
+    (let* ((parsed (yason:parse (gen-compile-commands) :object-as :alist))
+           (args (cdr (assoc "arguments" (first parsed) :test #'equal))))
+      (include-flags args))))
 
 ;;;; Autowrap
 
