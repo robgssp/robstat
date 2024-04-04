@@ -225,26 +225,26 @@
                     "org.freedesktop.NetworkManager.Connection.Active"
                     "Id"))
                  (state
-                   (dbus:get-property
-                    *dbus* "org.freedesktop.NetworkManager"
-                    wifi-conn
-                    "org.freedesktop.NetworkManager.Connection.Active"
-                    "State"))
-                 (ip4-config
-                   (dbus:get-property
-                    *dbus* "org.freedesktop.NetworkManager"
-                    wifi-conn
-                    "org.freedesktop.NetworkManager.Connection.Active"
-                    "Ip4Config"))
+                   (decode-wifi-state
+                    (dbus:get-property
+                     *dbus* "org.freedesktop.NetworkManager"
+                     wifi-conn
+                     "org.freedesktop.NetworkManager.Connection.Active"
+                     "State")))
                  (addresses
-                   (dbus:get-property
-                    *dbus* "org.freedesktop.NetworkManager"
-                    ip4-config
-                    "org.freedesktop.NetworkManager.IP4Config"
-                    "AddressData")))
+                   (when (eq state :activated)
+                     (dbus:get-property
+                      *dbus* "org.freedesktop.NetworkManager"
+                      (dbus:get-property
+                       *dbus* "org.freedesktop.NetworkManager"
+                       wifi-conn
+                       "org.freedesktop.NetworkManager.Connection.Active"
+                       "Ip4Config")
+                      "org.freedesktop.NetworkManager.IP4Config"
+                      "AddressData"))))
             (list :strength strength
                   :ssid ssid
-                  :state (decode-wifi-state state)
+                  :state state
                   :address (second (assoc "address" (first addresses)
                                           :test #'equal))))))))
 
