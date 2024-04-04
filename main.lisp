@@ -16,6 +16,10 @@
 
 (defvar *memo-vars* ())
 
+(defun logf (fmt &rest args)
+  (apply #'format *error-output* fmt args)
+  (finish-output *error-output*))
+
 (defun make-dbus ()
   (let* ((event-base (make-instance 'iolib:event-base))
          (connection (dbus:open-connection event-base (dbus:system-server-addresses))))
@@ -417,7 +421,7 @@
              (acheck (snd-mixer-selem-register handle nil nil))
              ;; (snd-mixer-set-callback handle (autowrap:callback 'mixer-event))
              (acheck (snd-mixer-load handle))
-             (format *error-output* "Volume thread listening...~%")
+             (logf "Volume thread listening...~%")
              (loop
               (progn
                 (snd-mixer-wait handle -1)
@@ -500,7 +504,7 @@ run it without the with. Useful for optional context-building."
                ((error
                   #'(lambda (err)
                       (unless entered
-                        (format *error-output* "~a failed: ~a~%proceeding without...~%" ',with err)
+                        (logf "~a failed: ~a~%proceeding without...~%" ',with err)
                         (return-from inner)))))
              (return-from outer
                (,with ,args
@@ -528,7 +532,7 @@ run it without the with. Useful for optional context-building."
                                 `((*error-output* . ,*error-output*)
                                   (*status-lock* . ,*status-lock*)
                                   (*status-condition* . ,*status-condition*)))))
-        (format *error-output* "Robstat started~%")
+        (logf "Robstat started~%")
         (finish-output *error-output*)
         (unwind-protect
              (funcall f)
@@ -538,7 +542,7 @@ run it without the with. Useful for optional context-building."
              #'(lambda () (error "Kill thread"))))
           (handler-case (bt2:join-thread vol-thread)
             (error (e)
-              (format *error-output* "Vol thread joined with ~a~%" e)))
+              (logf "Vol thread joined with ~a~%" e)))
           (when logfile (close *error-output*)))))))
 
 (defmacro with-status-env ((&rest args) &body body)
@@ -568,7 +572,7 @@ run it without the with. Useful for optional context-building."
       ,@(mapcar #'(lambda (arg)
                     `(handler-case ,arg
                        (error (v)
-                         (format *error-output* "Error with item ~a: ~a~%" ',arg v)
+                         (logf "Error with item ~a: ~a~%" ',arg v)
                          (item "<error>" :color :red))))
                 items))))
 
@@ -609,7 +613,7 @@ run it without the with. Useful for optional context-building."
           (uiop:xdg-config-pathname "robstat/stat.lisp")))
     (if (not config-file)
         (progn
-          (format *error-output* "File $XDG_CONFIG_HOME/robstat/stat.lisp not found, using default~%")
+          (logf "File $XDG_CONFIG_HOME/robstat/stat.lisp not found, using default~%")
           (finish-output *error-output*)
           (main0))
         (let ((*package* (symbol-package 'robstat-user)))
