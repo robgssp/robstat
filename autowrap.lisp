@@ -18,7 +18,7 @@
   (defun nix-includes ()
     (let* ((cflags (uiop:getenv "NIX_CFLAGS_COMPILE"))
            (split (uiop:split-string cflags :separator " ")))
-      (cons (uiop:getenv "LIBC")
+      (cons (format nil "~a/include" (uiop:getenv "LIBC"))
             (include-flags split))))
 
   (defun gen-compile-commands ()
@@ -47,7 +47,6 @@
  :sysincludes (cl:cons "." (robstat::includes-from-compile-commands))
  :trace-c2ffi cl:t
  :spec-path #p"./spec/"
- :exclude-arch ("i686-pc-linux-gnu" "i686-pc-windows-msvc" "x86_64-pc-windows-msvc" "i686-apple-darwin9" "x86_64-apple-darwin9" "i386-unknown-freebsd" "x86_64-unknown-freebsd" "i386-unknown-openbsd" "x86_64-unknown-openbsd" "arm-pc-linux-gnu" "aarch64-pc-linux-gnu" "arm-unknown-linux-androideabi" "aarch64-unknown-linux-android" "i686-unknown-linux-android" "x86_64-unknown-linux-android")
  :exclude-definitions (".*")
  :include-definitions ("getloadavg" "size_t" "timeval" "timespec"
                                     "statvfs" "__fsblkcnt_t" "__fsfilcnt_t"
