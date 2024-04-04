@@ -7,7 +7,7 @@
     :yellow "#FFFF00"
     :green  "#00FF00"
     :blue   "#0000FF"
-    :purple "#800080"))
+    :purple "#FF00FF"))
 
 (defvar *dbus*)
 
@@ -149,18 +149,15 @@
   "Battery status: \"Discharging\", \"Charging\", \"Full\" or other"
   (cdr (assoc "POWER_SUPPLY_STATUS" (battery-stats) :test #'equal)))
 
-(defun battery-color ()
-  (if (< (battery-seconds) (* 30 60))
-      :red
-      :white))
-
 (defun battery ()
   "Formatted battery status"
   (let ((level (floor (* (battery-level) 100))))
     (match (battery-status)
       ("Discharging"
        (item (fmt "BAT ~a% ~a" level (battery-time))
-             :color (battery-color)))
+             :color (if (< (battery-seconds) (* 30 60))
+                        :red
+                        :white)))
       ("Charging"
        (item (fmt "CHG ~a% ~a" level (battery-time))))
       ("Full"
@@ -283,7 +280,7 @@
            :color (if (>= strength 50) :green :yellow)))
     ((plist :state _)
      (item (fmt "W: down")
-           :color :red))))
+           :color :orange))))
 
 ;;;; Load
 
