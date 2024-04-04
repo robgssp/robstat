@@ -431,42 +431,63 @@
 
 ;;;; Bluetooth
 
+(defun any (list)
+  (reduce (lambda (a b) (or a b))
+          list
+          :initial-value nil))
+
+(defun property (obj interface prop)
+  "Extract properties out of get-managed-objects' alist-of-alists repr"
+  (second
+   (assoc prop
+          (second
+           (assoc interface (second obj) :test #'string=))
+          :test #'string=)))
+
+(defun bluetooth-info ()
+  "BlueZ's info structure"
+  (memoize-status ()
+    (dbus:get-managed-objects *dbus* "org.bluez" "/")))
+
+(defun bluetooth-enabled ()
+  (if (any (remove-if-not
+            (lambda (obj)
+              (property obj "org.bluez.Adapter1" "Powered"))
+            (bluetooth-info)))
+      t
+      nil))
+
 (defun bluetooth-devices ()
   "All connected bluetooth devices"
   (memoize-status ()
-    (let ((objs (dbus:get-managed-objects *dbus* "org.bluez" "/")))
-      (flet ((property (obj interface prop)
-               (second
-                (assoc prop
-                       (second
-                        (assoc interface (second obj) :test #'string=))
-                       :test #'string=))))
-        (mapcar
-         (lambda (obj)
-           (let ((name (property obj "org.bluez.Device1" "Name"))
-                 (battery (property obj "org.bluez.Battery1" "Percentage")))
-             (append (list :name name)
-                     (when battery (list :battery battery)))))
-         (remove-if-not
-          (lambda (obj)
-            (property obj "org.bluez.Device1" "Connected"))
-          objs))))))
+    (mapcar
+     (lambda (obj)
+       (let ((name (property obj "org.bluez.Device1" "Name"))
+             (battery (property obj "org.bluez.Battery1" "Percentage")))
+         (append (list :name name)
+                 (when battery (list :battery battery)))))
+     (remove-if-not
+      (lambda (obj)
+        (property obj "org.bluez.Device1" "Connected"))
+      (bluetooth-info)))))
 
 (defun bluetooth ()
-  (match (bluetooth-devices)
-    (nil "-")
-    (devices
-     (format nil "~{~a~^, ~}"
-             (mapcar
-              (lambda-match
-                ((plist :name name :battery nil)
-                 (format nil "~a"
-                         (subseq name 0 (min (length name) 3))))
-                ((plist :name name :battery battery)
-                 (format nil "~a ~a%"
-                         (subseq name 0 (min (length name) 3))
-                         battery)))
-              devices)))))
+  (if (not (bluetooth-enabled))
+      "_"
+      (match (bluetooth-devices)
+        (nil "-")
+        (devices
+         (format nil "~{~a~^, ~}"
+                 (mapcar
+                  (lambda-match
+                    ((plist :name name :battery nil)
+                     (format nil "~a"
+                             (subseq name 0 (min (length name) 3))))
+                    ((plist :name name :battery battery)
+                     (format nil "~a ~a%"
+                             (subseq name 0 (min (length name) 3))
+                             battery)))
+                  devices))))))
 
 ;;;; Memory
 
