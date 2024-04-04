@@ -1,5 +1,7 @@
 (in-package :robstat)
 
+;; (declaim (optimize (debug 3)))
+
 (defvar *colors*
   '(:white  "#FFFFFF"
     :red    "#FF0000"
