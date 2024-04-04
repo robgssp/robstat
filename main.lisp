@@ -139,12 +139,14 @@
          (floor (mod (/ sec 60) 60)))))
 
 (defun battery-level ()
+  "Battery level in [0.0, 1.0]"
   (let ((stats (battery-stats)))
     (/ (battery-stat "POWER_SUPPLY_CHARGE_NOW" stats)
        1.0
        (battery-stat "POWER_SUPPLY_CHARGE_FULL_DESIGN" stats))))
 
 (defun battery-status ()
+  "Battery status: \"Discharging\", \"Charging\", \"Full\" or other"
   (cdr (assoc "POWER_SUPPLY_STATUS" (battery-stats) :test #'equal)))
 
 (defun battery-color ()
@@ -168,7 +170,6 @@
 
 ;;;; Networking
 
-;; -> (list (name type dbus-path))
 (defun connections ()
   "Active NetworkManager connections, returned as a list of (name type dbus-path) triples."
   (memoize-status ()
@@ -189,6 +190,7 @@
              "ActiveConnections"))))
 
 (defun wifi-info ()
+  "Info for the first wifi card, as (:strength 0-100 :ssid \"weefee\" :state :activated :address \"1.2.3.4\""
   (memoize-status ()
     (let* ((wifi-conn
              (third (find-if (lambda (conn)
@@ -262,6 +264,7 @@
         (item "No VPNs" :color :yellow))))
 
 (defun decode-wifi-state (state)
+  "Wifi state can be unknown, activating, activated, deactivating or deactivated"
   (case state
     (0 :unknown)
     (1 :activating)
@@ -432,6 +435,7 @@
 ;;;; Bluetooth
 
 (defun bluetooth-devices ()
+  "All connected bluetooth devices"
   (memoize-status ()
     (let ((objs (dbus:get-managed-objects *dbus* "org.bluez" "/")))
       (flet ((property (obj interface prop)
