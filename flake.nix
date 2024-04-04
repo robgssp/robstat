@@ -15,16 +15,16 @@
 
         devShells.default = pkgs.mkShell {
           packages = [
-            (pkgs.sbcl.withPackages (pkgs: with pkgs; [
-              local-time yason alexandria trivia cl-autowrap cl-ppcre dbus swank
-            ]))
+            (pkgs.sbcl.withPackages (_: self.packages.${system}.robstat.lispLibs))
           ];
           buildInputs = with pkgs; [ alsa-lib c2ffi clang ];
+          inputsFrom = [ self.packages.${system}.default ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (with pkgs; [ alsa-lib libfixposix libffi ]);
           shellHook = ''
             export CL_SOURCE_REGISTRY=`pwd`
-          '';
+            export LIBC=${pkgs.stdenv.cc.libc.dev}
+        # #   '';
         };
       });
 }

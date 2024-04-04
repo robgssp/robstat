@@ -1,21 +1,26 @@
-{ pkgs, lib, sbcl, alsa-lib, c2ffi, makeBinaryWrapper }:
+{ pkgs, stdenv, lib, sbcl, wrapLisp, alsa-lib, c2ffi, clang, makeBinaryWrapper }:
 let
-  pkg = sbcl.buildASDFSystem {
+  sbclScript = wrapLisp {
+    pkg = sbcl;
+    faslExt = "fasl";
+    flags = [ "--script" ];
+  };
+  pkg = sbclScript.buildASDFSystem {
     pname = "robstat";
     version = "0.1";
     src = ./.;
     lispLibs = with sbcl.pkgs; [ local-time yason alexandria
-                                 trivia cl-autowrap dbus swank
+                                 trivia cl-autowrap cl-plus-c dbus swank
                                  cl-ppcre ];
+    LIBC = stdenv.cc.libc.dev;
     nativeLibs = [ alsa-lib ];
-    nativeBuildInputs = [ c2ffi makeBinaryWrapper ];
-    flags = [ "--script" ];
+    nativeBuildInputs = [ c2ffi clang makeBinaryWrapper ];
     buildScript = pkgs.writeText "build-robstat.lisp" ''
       (load "${pkg.asdfFasl}/asdf.${pkg.faslExt}")
       (ensure-directories-exist #p"./spec/")
       (asdf:load-asd (merge-pathnames "robstat.asd" (uiop:getcwd)))
       (asdf:load-system :robstat)
-      ;; (sb-ext:save-lisp-and-die "robstat" :executable t :toplevel #'robstat:main)
+      ;; (sb-ext:save-lisp-and-die "robstat" :executable t :toplevel #'robstat:main )
       (asdf:operate 'asdf:program-op :robstat)
     '';
     installPhase = ''
