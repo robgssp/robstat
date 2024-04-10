@@ -609,7 +609,6 @@ run it without the with. Useful for optional context-building."
      (disk-free "/")
      (system-load)
      (memory)
-     ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
      (volume)
      (bluetooth)
      (local-time:format-timestring
@@ -625,7 +624,6 @@ run it without the with. Useful for optional context-building."
    (disk-free "/")
    (system-load)
    (memory)
-   ;; (item (fmt "~a | ~a" (memory-used) (memory-available)))
    (volume)
    (local-time:format-timestring
     nil (local-time:now)
