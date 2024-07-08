@@ -51,4 +51,5 @@
  :include-definitions ("getloadavg" "size_t" "timeval" "timespec"
                                     "statvfs" "__fsblkcnt_t" "__fsfilcnt_t"
                                     ".*snd_mixer.*" ".*SND_.*"
-                                    "sysconf" "_SC_.*"))
+                                    "sysconf" "_SC_.*"
+                                    "pa_.*" "PA_.*"))

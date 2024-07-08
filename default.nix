@@ -1,4 +1,4 @@
-{ pkgs, stdenv, lib, sbcl, wrapLisp, alsa-lib, c2ffi, clang, makeBinaryWrapper }:
+{ pkgs, stdenv, lib, sbcl, wrapLisp, alsa-lib, pulseaudio, c2ffi, clang, makeBinaryWrapper }:
 let
   sbclScript = wrapLisp {
     pkg = sbcl;
@@ -13,8 +13,8 @@ let
                                  trivia cl-autowrap cl-plus-c dbus swank
                                  cl-ppcre ];
     LIBC = stdenv.cc.libc.dev;
-    nativeLibs = [ alsa-lib ];
-    nativeBuildInputs = [ c2ffi clang makeBinaryWrapper ];
+    nativeLibs = [ alsa-lib pulseaudio ];
+    nativeBuildInputs = [ clang makeBinaryWrapper ];
     buildScript = pkgs.writeText "build-robstat.lisp" ''
       (load "${pkg.asdfFasl}/asdf.${pkg.faslExt}")
       (ensure-directories-exist #p"./spec/")
@@ -26,6 +26,7 @@ let
     installPhase = ''
       echo "LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
       mkdir -pv $out/bin
+      cp -rv ./* $out/
       cp -v ./robstat $out/bin
       wrapProgram $out/bin/robstat \
         --prefix LD_LIBRARY_PATH : $LD_LIBRARY_PATH
