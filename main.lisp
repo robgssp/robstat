@@ -11,12 +11,38 @@
     :blue   "#0000FF"
     :purple "#FF00FF"))
 
+(defvar *status-output* *standard-output*)
+
 (defvar *dbus*)
 
 (defvar *status-condition*)
 (defvar *status-lock*)
 
 (defvar *memo-vars* ())
+
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun split-at (pred list)
+    "Split LIST at the first item for which PRED is true;
+returns (VALUES LEFT RIGHT)"
+    (if (funcall pred (car list))
+        (values nil list)
+        (multiple-value-bind (left right)
+            (split-at pred (cdr list))
+          (values (cons (car list) left)
+                  right))))
+
+  (defun extract-decls (body)
+    "Break BODY into (VALUES DECLS BODY1)"
+    (split-at (lambda (exp) (not (eq (car exp) 'declare)))
+              body)))
+
+(defmacro bracket ((binding val) cleanup &body body)
+  (multiple-value-bind (decls body) (extract-decls body)
+    `(let ((,binding ,val))
+       ,@decls
+       (unwind-protect
+            (progn ,@body)
+         ,cleanup))))
 
 (defun logf (fmt &rest args)
   (apply #'format *error-output* fmt args)
@@ -66,12 +92,12 @@
 ;;;; Output
 
 (defun emit-status-version ()
-  (yason:with-output (*standard-output*)
+  (yason:with-output (*status-output*)
     (yason:encode-plist '("version" 1)))
-  (format t "~%"))
+  (format *status-output* "~%"))
 
 (defun emit-status (&rest args)
-  (yason:with-output (*standard-output*)
+  (yason:with-output (*status-output*)
     (yason:encode (mapcar (compose #'to-i3bar #'ensure-item) args))
     nil))
 
@@ -156,10 +182,15 @@
   (let ((level (floor (* (battery-level) 100))))
     (match (battery-status)
       ("Discharging"
-       (item (fmt "BAT ~a% ~a" level (battery-time))
-             :color (if (< (battery-seconds) (* 30 60))
-                        :red
-                        :white)))
+       (handler-case
+           (item (fmt "BAT ~a% ~a" level (battery-time))
+                 :color (if (< (battery-seconds) (* 30 60))
+                            :red
+                            :white))
+         (error (_)
+           (declare (ignore _))
+           (item (fmt "BAT ~a% ???" level)
+                 :color :yellow))))
       ("Charging"
        (item (fmt "CHG ~a% ~a" level (battery-time))))
       ("Full"
@@ -344,63 +375,65 @@
            (error "~a failed with ~a" ',(first func) ,ret)))))
 
 (defvar *alsa-handle*)
-(defvar *alsa-elem*)
 
 (defun call-with-volume (f)
-  (cffi:with-foreign-strings ((master "Master")
-                              (card "default"))
+  (cffi:with-foreign-string (card "default")
     (c-with ((mixid (:pointer snd-mixer-selem-id-t))
              (handle (:pointer snd-mixer-t)))
-      (acheck (snd-mixer-open (handle &) 0))
-      (unwind-protect
-           (progn
-             (acheck (snd-mixer-attach handle card))
-             (acheck (snd-mixer-selem-register handle nil nil))
-             (acheck (snd-mixer-load handle))
+      (bracket (_ (acheck (snd-mixer-open (handle &) 0)))
+               (snd-mixer-close handle)
+        (declare (ignore _))
 
-             (acheck (snd-mixer-selem-id-malloc (mixid &)))
-             (unwind-protect
-                  (progn
-                    (snd-mixer-selem-id-set-index mixid 0)
-                    (snd-mixer-selem-id-set-name mixid master)
-                    (let ((elem (snd-mixer-find-selem handle mixid)))
-                      (unless (null elem)
-                        (funcall f handle elem))))
-               (snd-mixer-selem-id-free mixid)))
-        (snd-mixer-close handle)))))
+        (acheck (snd-mixer-attach handle card))
+        (acheck (snd-mixer-selem-register handle nil nil))
+        (acheck (snd-mixer-load handle))
 
-(defmacro with-volume ((&optional (handle '*alsa-handle*) (elem '*alsa-elem*)) &body body)
+        (funcall f handle)))))
+
+(defmacro with-volume ((&optional (handle '*alsa-handle*)) &body body)
   `(call-with-volume
-    #'(lambda (,handle ,elem)
+    #'(lambda (,handle)
         ,@body)))
 
 (defun volume-level ()
   "Gets the master volume in (list :volume [0.0-1.0] :muted t/nil)"
   (memoize-status ()
-    (c-with ((minv :long)
-             (maxv :long)
-             (vol :long)
-             (muted :int))
-      (acheck (snd-mixer-handle-events *alsa-handle*))
-      (acheck
-       (snd-mixer-selem-get-playback-volume-range
-        *alsa-elem*
-        (minv &)
-        (maxv &)))
-      (acheck
-       (snd-mixer-selem-get-playback-volume
-        *alsa-elem* 0
-        (vol &)))
-      (acheck
-       (snd-mixer-selem-get-playback-switch
-        *alsa-elem* 0
-        (muted &)))
+    (cffi:with-foreign-string (master "Master")
+      (c-with ((minv :long)
+               (maxv :long)
+               (vol :long)
+               (muted :int)
+               (mixid (:pointer snd-mixer-selem-id-t)))
+        (bracket (_ (acheck (snd-mixer-selem-id-malloc (mixid &))))
+                 (snd-mixer-selem-id-free mixid)
+          (declare (ignore _))
 
-      (list :volume (/ (- vol minv 0.0) (- maxv minv))
-            :muted (= muted 0)))))
+          (snd-mixer-selem-id-set-index mixid 0)
+          (snd-mixer-selem-id-set-name mixid master)
+          (let ((elem (snd-mixer-find-selem *alsa-handle* mixid)))
+            (when (cffi:null-pointer-p (autowrap:ptr elem))
+              (error "snd_mixer_find_selem returned null"))
+
+            (acheck (snd-mixer-handle-events *alsa-handle*))
+            (acheck
+             (snd-mixer-selem-get-playback-volume-range
+              elem
+              (minv &)
+              (maxv &)))
+            (acheck
+             (snd-mixer-selem-get-playback-volume
+              elem 0
+              (vol &)))
+            (acheck
+             (snd-mixer-selem-get-playback-switch
+              elem 0
+              (muted &)))
+
+            (list :volume (/ (- vol minv 0.0) (- maxv minv))
+                  :muted (= muted 0))))))))
 
 (defun volume ()
-  (let-match* (((plist :volume vol :muted muted) (volume-level))
+  (let-match* (((plist :volume (and vol (type number)) :muted muted) (volume-level))
                (pvol (round (* vol 100))))
               (if muted
                   (item (fmt "Muted ~d%" pvol) :color :yellow)
@@ -416,20 +449,20 @@
 (defun listen-volume ()
   (cffi:with-foreign-string (card "default")
     (c-with ((handle (:pointer snd-mixer-t)))
-      (acheck (snd-mixer-open (handle &) 0))
-      (unwind-protect
-           (progn
-             (acheck (snd-mixer-attach handle card))
-             (acheck (snd-mixer-selem-register handle nil nil))
-             ;; (snd-mixer-set-callback handle (autowrap:callback 'mixer-event))
-             (acheck (snd-mixer-load handle))
-             (logf "Volume thread listening...~%")
-             (loop
-              (progn
-                (snd-mixer-wait handle -1)
-                (snd-mixer-handle-events handle)
-                (bt2:condition-broadcast *status-condition*))))
-        (snd-mixer-close handle)))))
+      (bracket (_ (acheck (snd-mixer-open (handle &) 0)))
+               (snd-mixer-close handle)
+        (declare (ignore _))
+
+        (acheck (snd-mixer-attach handle card))
+        (acheck (snd-mixer-selem-register handle nil nil))
+        ;; (snd-mixer-set-callback handle (autowrap:callback 'mixer-event))
+        (acheck (snd-mixer-load handle))
+        (logf "Volume thread listening...~%")
+        (loop
+         (progn
+           (snd-mixer-wait handle -1)
+           (snd-mixer-handle-events handle)
+           (bt2:condition-broadcast *status-condition*)))))))
 
 ;;;; Bluetooth
 
@@ -536,28 +569,22 @@ run it without the with. Useful for optional context-building."
                       (body)))))
          (body)))))
 
-(defun call-with-status-env (f &key (logfile t))
+(defun call-with-status-env (f &key)
   (ignorable-with with-volume ()
     (ignorable-with dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
-      (let* ((*error-output* (if logfile
-                                 (open #p"~/.robstat.log"
-                                       :direction :output
-                                       :if-exists :supersede)
-                                 *error-output*))
-             (*status-lock* (bt2:make-lock))
+      (let* ((*status-lock* (bt2:make-lock))
              (*status-condition* (bt2:make-condition-variable))
              (local-time:*default-timezone*
                (local-time::make-timezone :path #p"/etc/localtime"
                                           :name "localtime"))
              (vol-thread
                (bt2:make-thread #'listen-volume
+                                :name "volume listener"
                                 :trap-conditions t
                                 :initial-bindings
-                                `((*error-output* . ,*error-output*)
-                                  (*status-lock* . ,*status-lock*)
+                                `((*status-lock* . ,*status-lock*)
                                   (*status-condition* . ,*status-condition*)))))
         (logf "Robstat started~%")
-        (finish-output *error-output*)
         (unwind-protect
              (funcall f)
           (when (bt2:thread-alive-p vol-thread)
@@ -566,8 +593,7 @@ run it without the with. Useful for optional context-building."
              #'(lambda () (error "Kill thread"))))
           (handler-case (bt2:join-thread vol-thread)
             (error (e)
-              (logf "Vol thread joined with ~a~%" e)))
-          (when logfile (close *error-output*)))))))
+              (logf "Vol thread joined with ~a~%" e))))))))
 
 (defmacro with-status-env ((&rest args) &body body)
   `(call-with-status-env #'(lambda () ,@body) ,@args))
@@ -580,11 +606,12 @@ run it without the with. Useful for optional context-building."
    Items can be output from `item', or strings."
   `(with-status-env ()
      (emit-status-version)
-     (format t "[")
+     (format *status-output* "[")
+     (finish-output *status-output*)
      (loop while t do
        (progn
          (status-once () ,@items)
-         (format t ",~%")
+         (format *status-output* ",~%")
          (bt2:with-lock-held (*status-lock*)
            (bt2:condition-wait *status-condition* *status-lock*
                                :timeout *interval*))))))
@@ -631,12 +658,23 @@ run it without the with. Useful for optional context-building."
               (:day 2) #\  (:hour 2) #\: (:min 2)))))
 
 (defun main ()
-  (let ((config-file
-          (uiop:xdg-config-pathname "robstat/stat.lisp")))
-    (if (not config-file)
-        (progn
-          (logf "File $XDG_CONFIG_HOME/robstat/stat.lisp not found, using default~%")
-          (finish-output *error-output*)
-          (main0))
-        (let ((*package* (symbol-package 'robstat-user)))
-          (load config-file)))))
+  (let ((logfile (open #p"~/.robstat.log"
+                       :direction :output
+                       :if-exists :supersede)))
+    (unwind-protect
+         (progn
+           (setf *status-output* *standard-output*
+                 *standard-output* logfile
+                 *error-output* logfile)
+
+           (swank:create-server :port 4005)
+
+           (let ((config-file
+                  (uiop:xdg-config-pathname "robstat/stat.lisp")))
+             (if (not config-file)
+                 (progn
+                   (logf "File $XDG_CONFIG_HOME/robstat/stat.lisp not found, using default~%")
+                   (main0))
+                 (let ((*package* (symbol-package 'robstat-user)))
+                   (load config-file)))))
+      (close logfile))))
