@@ -15,8 +15,8 @@
 
 (defvar *dbus*)
 
-(defvar *status-condition*)
-(defvar *status-lock*)
+(defvar *status-condition* (bt2:make-condition-variable))
+(defvar *status-lock* (bt2:make-lock))
 
 (defvar *memo-vars* ())
 
@@ -63,6 +63,8 @@ returns (VALUES LEFT RIGHT)"
 ;;                                                1.0
 ;;                                                (internal-time-units-per-second)))))))
 
+(defun status-refresh ()
+  (bt2:condition-broadcast *status-condition*))
 
 ;;;; Memoization
 
@@ -220,7 +222,8 @@ returns (VALUES LEFT RIGHT)"
              "ActiveConnections"))))
 
 (defun wifi-info ()
-  "Info for the first wifi card, as (:strength 0-100 :ssid \"weefee\" :state :activated :address \"1.2.3.4\""
+  "Info for the first wifi card, as
+  (:strength 0-100 :ssid \"weefee\" :state :activated :address \"1.2.3.4\")"
   (memoize-status ()
     (let* ((wifi-conn
              (third (find-if (lambda (conn)
@@ -322,7 +325,7 @@ returns (VALUES LEFT RIGHT)"
     (getloadavg (x &) 1)
     (x 0)))
 
-(defvar +ncores+ (sysconf +_sc_nprocessors_onln+))
+(defparameter +ncores+ (sysconf +_sc_nprocessors_onln+))
 
 (defun system-load (&key (warn +ncores+) (advise (* +ncores+ 0.75)))
   (let ((load (system-load-1min)))
@@ -376,26 +379,40 @@ returns (VALUES LEFT RIGHT)"
 
 (defvar *alsa-handle*)
 
-(defun call-with-volume (f)
-  (cffi:with-foreign-string (card "default")
-    (c-with ((mixid (:pointer snd-mixer-selem-id-t))
-             (handle (:pointer snd-mixer-t)))
-      (bracket (_ (acheck (snd-mixer-open (handle &) 0)))
-               (snd-mixer-close handle)
-        (declare (ignore _))
+(defun call-with-volume-alsa (f)
+  (bracket (thread
+            (bt2:make-thread
+             (lambda () (listen-volume-alsa))
+             :name "alsa listener"
+             :trap-conditions t))
+           (progn
+             (bt2:interrupt-thread
+              thread
+              (lambda () (error "Kill ALSA Thread")))
+             (handler-case
+                 (bt2:join-thread thread)
+               (error (e)
+                 (logf "Volume listener thread failed with: ~a~%" e))))
 
-        (acheck (snd-mixer-attach handle card))
-        (acheck (snd-mixer-selem-register handle nil nil))
-        (acheck (snd-mixer-load handle))
+    (cffi:with-foreign-string (card "default")
+      (c-with ((mixid (:pointer snd-mixer-selem-id-t))
+               (handle (:pointer snd-mixer-t)))
+        (bracket (_ (acheck (snd-mixer-open (handle &) 0)))
+                 (snd-mixer-close handle)
+          (declare (ignore _))
 
-        (funcall f handle)))))
+          (acheck (snd-mixer-attach handle card))
+          (acheck (snd-mixer-selem-register handle nil nil))
+          (acheck (snd-mixer-load handle))
 
-(defmacro with-volume ((&optional (handle '*alsa-handle*)) &body body)
-  `(call-with-volume
+          (funcall f handle))))))
+
+(defmacro with-volume-alsa ((&optional (handle '*alsa-handle*)) &body body)
+  `(call-with-volume-alsa
     #'(lambda (,handle)
         ,@body)))
 
-(defun volume-level ()
+(defun volume-level-alsa ()
   "Gets the master volume in (list :volume [0.0-1.0] :muted t/nil)"
   (memoize-status ()
     (cffi:with-foreign-string (master "Master")
@@ -411,8 +428,8 @@ returns (VALUES LEFT RIGHT)"
           (snd-mixer-selem-id-set-index mixid 0)
           (snd-mixer-selem-id-set-name mixid master)
           (let ((elem (snd-mixer-find-selem *alsa-handle* mixid)))
-            (when (cffi:null-pointer-p (autowrap:ptr elem))
-              (error "snd_mixer_find_selem returned null"))
+            (assert (not (autowrap:wrapper-null-p elem)) (elem)
+                    "snd_mixer_find_selem() returned null")
 
             (acheck (snd-mixer-handle-events *alsa-handle*))
             (acheck
@@ -432,8 +449,9 @@ returns (VALUES LEFT RIGHT)"
             (list :volume (/ (- vol minv 0.0) (- maxv minv))
                   :muted (= muted 0))))))))
 
-(defun volume ()
-  (let-match* (((plist :volume (and vol (type number)) :muted muted) (volume-level))
+(defun volume-alsa ()
+  (let-match* (((plist :volume (and vol (type number)) :muted muted)
+                (volume-level-alsa))
                (pvol (round (* vol 100))))
               (if muted
                   (item (fmt "Muted ~d%" pvol) :color :yellow)
@@ -446,7 +464,7 @@ returns (VALUES LEFT RIGHT)"
 ;;   (format t "Received event~%")
 ;;   0)
 
-(defun listen-volume ()
+(defun listen-volume-alsa ()
   (cffi:with-foreign-string (card "default")
     (c-with ((handle (:pointer snd-mixer-t)))
       (bracket (_ (acheck (snd-mixer-open (handle &) 0)))
@@ -462,7 +480,140 @@ returns (VALUES LEFT RIGHT)"
          (progn
            (snd-mixer-wait handle -1)
            (snd-mixer-handle-events handle)
-           (bt2:condition-broadcast *status-condition*)))))))
+           (status-refresh)))))))
+
+;;;; Pulseaudio Volume
+
+(autowrap:define-bitmask 'pa-context-flags
+    `((:noflags . ,+pa-context-noflags+)
+      (:noautospawn .  ,+pa-context-noautospawn+)
+      (:nofail . ,+pa-context-nofail+)))
+
+(autowrap:define-bitmask-from-constants (pa-subscription-mask)
+  +pa-subscription-mask-null+
+  +pa-subscription-mask-sink+
+  +pa-subscription-mask-source+
+  +pa-subscription-mask-sink-input+
+  +pa-subscription-mask-source-output+
+  +pa-subscription-mask-module+
+  +pa-subscription-mask-client+
+  +pa-subscription-mask-sample-cache+
+  +pa-subscription-mask-server+
+  +pa-subscription-mask-card+
+  +pa-subscription-mask-all+)
+
+(autowrap:define-bitmask-from-constants (pa-sink-flags)
+  +pa-sink-noflags+
+  +pa-sink-hw-volume-ctrl+
+  +pa-sink-latency+
+  +pa-sink-hardware+
+  +pa-sink-network+
+  +pa-sink-hw-mute-ctrl+
+  +pa-sink-decibel-volume+
+  +pa-sink-flat-volume+
+  +pa-sink-dynamic-latency+
+  +pa-sink-set-formats+)
+
+(defvar *pa-context*)
+(defvar *pa-volume* 0)
+(defvar *pa-volume-db* nil)
+
+(defmacro pacheck (call)
+  (let ((ret (gensym)))
+    `(ematch ,call
+       ((and ,ret (type number))
+        (assert (>= ,ret 0) () "~a failed: ~a" ',(car call) (pa-strerror ,ret))
+        ,ret)
+       ((and ,ret (type autowrap:wrapper))
+        (assert (not (autowrap:wrapper-null-p ,ret)) ()
+                "~a failed: ~a"
+                ',(car call)
+                (when (boundp '*pa-context*)
+                  (pa-strerror (pa-context-errno *pa-context*))))
+        ,ret))))
+
+(autowrap:defcallback pulse-context-callback :void
+    ((ctx (:pointer pa-context))
+     (userdata :pointer))
+  (declare (ignore userdata))
+
+  (match (autowrap:enum-key '(:enum (pa-context-state)) (pa-context-get-state ctx))
+    (:ready
+     (pa-context-set-subscribe-callback ctx (autowrap:callback 'pulse-subscribe-callback) nil)
+     (let ((operation
+             (pacheck (pa-context-subscribe ctx (autowrap:mask 'pa-subscription-mask :server :sink)
+                                            nil nil))))
+       (pa-operation-unref operation))
+     (logf "Pulseaudio ready!~%"))
+    (:failed (logf "Pulseaudio initialization failed!~%"))))
+
+(autowrap:defcallback pulse-subscribe-callback :void
+    ((ctx (:pointer pa-context))
+     (event (:enum (pa-subscription-event-type)))
+     (userdata :pointer))
+  (declare (ignore userdata))
+
+  (let ((facility (logand event +pa-subscription-event-facility-mask+))
+        (type (logand event +pa-subscription-event-type-mask+)))
+    (format t "facility: ~a; type: ~a~%" facility type)
+    (pa-context-get-sink-info-by-name ctx "@DEFAULT_SINK@"
+                                      (autowrap:callback 'pulse-sink-info-callback)
+                                      nil)))
+
+(autowrap:defcallback pulse-sink-info-callback :void
+    ((ctx (:pointer pa-context))
+     (info (:pointer pa-sink-info))
+     (eol :int)
+     (userdata :pointer))
+  (declare (ignore ctx userdata))
+  (format t "Got sink info: ~a (eol ~a)~%" info eol)
+  (let ((vol (pa-cvolume-avg (pa-sink-info.volume info))))
+    (setf *pa-volume* (pa-sw-volume-to-linear vol))
+    (setf *pa-volume-db*
+          (if (member :decibel-volume (autowrap:mask-keywords 'pa-sink-flags (pa-sink-info.flags info)))
+              (pa-sw-volume-to-d-b vol)
+              nil))))
+
+(defun listen-volume-pulse ()
+  (bracket (mainloop (pacheck (pa-mainloop-new)))
+           (pa-mainloop-free mainloop)
+    (let* ((api (pacheck (pa-mainloop-get-api mainloop))))
+      (bracket (proplist (pa-proplist-new))
+               (pa-proplist-free proplist)
+        (pa-proplist-sets proplist "application.name" "robstat")
+        (pa-proplist-sets proplist "application.id" "org.robstat")
+        (pa-proplist-sets proplist "application.version" "0.69")
+        (bracket (*pa-context* (pa-context-new-with-proplist api "robstat" proplist))
+                 (pa-context-unref *pa-context*)
+          (pa-context-set-state-callback *pa-context* (autowrap:callback 'pulse-context-callback) nil)
+          (pa-context-connect *pa-context* nil (autowrap:mask 'pa-context-flags :noautospawn :nofail) api)
+
+          (loop (pacheck (pa-mainloop-iterate mainloop 1 nil))))))))
+
+(defun call-with-volume-pulse (f)
+  (bracket (thread
+            (bt2:make-thread
+             (lambda () (listen-volume-pulse))
+             :name "pulse listener"
+             :trap-conditions t))
+           (progn
+             (bt2:interrupt-thread
+              thread
+              (lambda () (error "Kill Pulse Thread")))
+             (handler-case
+                 (bt2:join-thread thread)
+               (error (e)
+                 (logf "Volume listener thread failed with: ~a~%" e))))
+
+    (funcall f)))
+
+(defmacro with-volume-pulse (() &body body)
+  `(call-with-volume-pulse
+    (lambda () ,@body)))
+
+(defun volume-pulse ()
+  (pa-sw-volume-to-linear *pa-volume*))
+
 
 ;;;; Bluetooth
 
@@ -546,13 +697,12 @@ returns (VALUES LEFT RIGHT)"
                       0.1)
                    :red
                    :white)))
-
 
 ;;;; Top-level
 
 (defmacro ignorable-with (with args &body body)
   "Attempts to run (with args body); if body is never reached,
-run it without the with. Useful for optional context-building."
+   run it without the with. Useful for optional context-building."
   `(flet ((body () ,@body))
      (let ((entered nil))
        (block outer
@@ -570,30 +720,14 @@ run it without the with. Useful for optional context-building."
          (body)))))
 
 (defun call-with-status-env (f &key)
-  (ignorable-with with-volume ()
+  (ignorable-with with-volume-alsa ()
     (ignorable-with dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
-      (let* ((*status-lock* (bt2:make-lock))
-             (*status-condition* (bt2:make-condition-variable))
-             (local-time:*default-timezone*
+      (let* ((local-time:*default-timezone*
                (local-time::make-timezone :path #p"/etc/localtime"
-                                          :name "localtime"))
-             (vol-thread
-               (bt2:make-thread #'listen-volume
-                                :name "volume listener"
-                                :trap-conditions t
-                                :initial-bindings
-                                `((*status-lock* . ,*status-lock*)
-                                  (*status-condition* . ,*status-condition*)))))
+                                          :name "localtime")))
+        
         (logf "Robstat started~%")
-        (unwind-protect
-             (funcall f)
-          (when (bt2:thread-alive-p vol-thread)
-            (bt2:interrupt-thread
-             vol-thread
-             #'(lambda () (error "Kill thread"))))
-          (handler-case (bt2:join-thread vol-thread)
-            (error (e)
-              (logf "Vol thread joined with ~a~%" e))))))))
+        (funcall f)))))
 
 (defmacro with-status-env ((&rest args) &body body)
   `(call-with-status-env #'(lambda () ,@body) ,@args))
@@ -636,7 +770,7 @@ run it without the with. Useful for optional context-building."
      (disk-free "/")
      (system-load)
      (memory)
-     (volume)
+     (volume-alsa)
      (bluetooth)
      (local-time:format-timestring
       nil (local-time:now)
@@ -651,7 +785,7 @@ run it without the with. Useful for optional context-building."
    (disk-free "/")
    (system-load)
    (memory)
-   (volume)
+   (volume-alsa)
    (local-time:format-timestring
     nil (local-time:now)
     :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-

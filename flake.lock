@@ -20,13 +20,12 @@
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1720334267,
-        "narHash": "sha256-7nUVULAU8VliSeu+ZA8+PN/n5jag9k0WwOrTwmMGgVM=",
-        "ref": "refs/heads/autowrap-libffi",
-        "rev": "8ad940f14f98fb494735600b741b561e6bb5ccfc",
-        "revCount": 642394,
-        "type": "git",
-        "url": "file:///home/robert/proj/nixpkgs"
+        "lastModified": 1720386169,
+        "narHash": "sha256-NGKVY4PjzwAa4upkGtAMz1npHGoRzWotlSnVlqI40mo=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "194846768975b7ad2c4988bdb82572c00222c0d7",
+        "type": "github"
       },
       "original": {
         "owner": "NixOS",

@@ -1,5 +1,5 @@
 (asdf:defsystem robstat
-  :description "i3 Status Bar"
+  :description "i3-compatible Status Bar"
   :version "0.1"
   :author "Rob Glossop <robgssp@gmail.com>"
   :license "MIT"

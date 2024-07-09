@@ -1,4 +1,4 @@
-{ pkgs, stdenv, lib, sbcl, wrapLisp, alsa-lib, pulseaudio, c2ffi, clang, makeBinaryWrapper }:
+{ pkgs, stdenv, lib, sbcl, wrapLisp, alsa-lib, pulseaudio, c2ffi, clang, makeWrapper }:
 let
   sbclScript = wrapLisp {
     pkg = sbcl;
@@ -14,7 +14,7 @@ let
                                  cl-ppcre ];
     LIBC = stdenv.cc.libc.dev;
     nativeLibs = [ alsa-lib pulseaudio ];
-    nativeBuildInputs = [ clang makeBinaryWrapper ];
+    nativeBuildInputs = [ clang makeWrapper ];
     buildScript = pkgs.writeText "build-robstat.lisp" ''
       (load "${pkg.asdfFasl}/asdf.${pkg.faslExt}")
       (ensure-directories-exist #p"./spec/")
