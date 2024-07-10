@@ -516,7 +516,8 @@ returns (VALUES LEFT RIGHT)"
 
 (defvar *pa-context*)
 (defvar *pa-volume* 0)
-(defvar *pa-volume-db* nil)
+(defvar *pa-muted-p* nil)
+(defvar *pa-flags* ())
 
 (defmacro pacheck (call)
   (let ((ret (gensym)))
@@ -532,7 +533,13 @@ returns (VALUES LEFT RIGHT)"
                   (pa-strerror (pa-context-errno *pa-context*))))
         ,ret))))
 
-(autowrap:defcallback pulse-context-callback :void
+(defmacro pa-op (call)
+  (let ((op (gensym)))
+    `(let ((,op (pacheck ,call)))
+       (pa-operation-unref ,op)
+       nil)))
+
+(autowrap:defcallback pulse-state-callback :void
     ((ctx (:pointer pa-context))
      (userdata :pointer))
   (declare (ignore userdata))
@@ -540,25 +547,25 @@ returns (VALUES LEFT RIGHT)"
   (match (autowrap:enum-key '(:enum (pa-context-state)) (pa-context-get-state ctx))
     (:ready
      (pa-context-set-subscribe-callback ctx (autowrap:callback 'pulse-subscribe-callback) nil)
-     (let ((operation
-             (pacheck (pa-context-subscribe ctx (autowrap:mask 'pa-subscription-mask :server :sink)
-                                            nil nil))))
-       (pa-operation-unref operation))
-     (logf "Pulseaudio ready!~%"))
-    (:failed (logf "Pulseaudio initialization failed!~%"))))
+
+     (pa-op (pa-context-subscribe ctx (autowrap:mask 'pa-subscription-mask :server :sink)
+                                  nil nil))
+
+     (pa-op (pa-context-get-sink-info-by-name ctx "@DEFAULT_SINK@"
+                                              (autowrap:callback 'pulse-sink-info-callback)
+                                              nil))
+     (logf "Pulseaudio thread listening...~%"))
+    (:failed (logf "Pulseaudio initialization failed: ~a~%" (pa-strerror (pa-context-errno ctx))))))
 
 (autowrap:defcallback pulse-subscribe-callback :void
     ((ctx (:pointer pa-context))
      (event (:enum (pa-subscription-event-type)))
      (userdata :pointer))
-  (declare (ignore userdata))
+  (declare (ignore event userdata))
 
-  (let ((facility (logand event +pa-subscription-event-facility-mask+))
-        (type (logand event +pa-subscription-event-type-mask+)))
-    (format t "facility: ~a; type: ~a~%" facility type)
-    (pa-context-get-sink-info-by-name ctx "@DEFAULT_SINK@"
-                                      (autowrap:callback 'pulse-sink-info-callback)
-                                      nil)))
+  (pa-op (pa-context-get-sink-info-by-name ctx "@DEFAULT_SINK@"
+                                           (autowrap:callback 'pulse-sink-info-callback)
+                                           nil)))
 
 (autowrap:defcallback pulse-sink-info-callback :void
     ((ctx (:pointer pa-context))
@@ -566,13 +573,16 @@ returns (VALUES LEFT RIGHT)"
      (eol :int)
      (userdata :pointer))
   (declare (ignore ctx userdata))
-  (format t "Got sink info: ~a (eol ~a)~%" info eol)
-  (let ((vol (pa-cvolume-avg (pa-sink-info.volume info))))
-    (setf *pa-volume* (pa-sw-volume-to-linear vol))
-    (setf *pa-volume-db*
-          (if (member :decibel-volume (autowrap:mask-keywords 'pa-sink-flags (pa-sink-info.flags info)))
-              (pa-sw-volume-to-d-b vol)
-              nil))))
+
+  (when (= eol 0)
+    (let* ((info (robstat.c::make-pa-sink-info :ptr info)))
+
+      (bt2:with-lock-held (*status-lock*)
+        (setf *pa-volume* (pa-cvolume-avg (pa-sink-info.volume info)))
+        (setf *pa-muted-p* (not (= 0 (pa-sink-info.mute info))))
+        (setf *pa-flags* (autowrap:mask-keywords 'pa-sink-flags (pa-sink-info.flags info))))
+
+      (status-refresh))))
 
 (defun listen-volume-pulse ()
   (bracket (mainloop (pacheck (pa-mainloop-new)))
@@ -585,7 +595,7 @@ returns (VALUES LEFT RIGHT)"
         (pa-proplist-sets proplist "application.version" "0.69")
         (bracket (*pa-context* (pa-context-new-with-proplist api "robstat" proplist))
                  (pa-context-unref *pa-context*)
-          (pa-context-set-state-callback *pa-context* (autowrap:callback 'pulse-context-callback) nil)
+          (pa-context-set-state-callback *pa-context* (autowrap:callback 'pulse-state-callback) nil)
           (pa-context-connect *pa-context* nil (autowrap:mask 'pa-context-flags :noautospawn :nofail) api)
 
           (loop (pacheck (pa-mainloop-iterate mainloop 1 nil))))))))
@@ -611,8 +621,22 @@ returns (VALUES LEFT RIGHT)"
   `(call-with-volume-pulse
     (lambda () ,@body)))
 
+(defun muted-p-pulse ()
+  *pa-muted-p*)
+
 (defun volume-pulse ()
-  (pa-sw-volume-to-linear *pa-volume*))
+  (let ((db (round (pa-sw-volume-to-linear *pa-volume*))))
+    (if *pa-muted-p*
+        (item (fmt "~a Muted" db) :color :yellow)
+        (item (fmt "~a" db)))))
+
+(defun volume-db-pulse ()
+  (if (member :decibel-volume *pa-flags*)
+      (let ((db (round (pa-sw-volume-to-d-b *pa-volume*))))
+        (if *pa-muted-p*
+            (item (fmt "~adB Muted" db) :color :yellow)
+            (item (fmt "~adB" db))))
+      (volume-pulse)))
 
 
 ;;;; Bluetooth
@@ -720,12 +744,12 @@ returns (VALUES LEFT RIGHT)"
          (body)))))
 
 (defun call-with-status-env (f &key)
-  (ignorable-with with-volume-alsa ()
+  (ignorable-with with-volume-pulse ()
     (ignorable-with dbus:with-open-bus (*dbus* (dbus:system-server-addresses))
       (let* ((local-time:*default-timezone*
                (local-time::make-timezone :path #p"/etc/localtime"
                                           :name "localtime")))
-        
+
         (logf "Robstat started~%")
         (funcall f)))))
 
@@ -744,9 +768,9 @@ returns (VALUES LEFT RIGHT)"
      (finish-output *status-output*)
      (loop while t do
        (progn
-         (status-once () ,@items)
-         (format *status-output* ",~%")
          (bt2:with-lock-held (*status-lock*)
+           (status-once () ,@items)
+           (format *status-output* ",~%")
            (bt2:condition-wait *status-condition* *status-lock*
                                :timeout *interval*))))))
 
@@ -785,7 +809,7 @@ returns (VALUES LEFT RIGHT)"
    (disk-free "/")
    (system-load)
    (memory)
-   (volume-alsa)
+   (volume-db-pulse)
    (local-time:format-timestring
     nil (local-time:now)
     :format '(:short-weekday #\  (:year 4) #\- (:month 2) #\-
@@ -801,7 +825,7 @@ returns (VALUES LEFT RIGHT)"
                  *standard-output* logfile
                  *error-output* logfile)
 
-           (swank:create-server :port 4005)
+           ;; (swank:create-server :port 4005)
 
            (let ((config-file
                   (uiop:xdg-config-pathname "robstat/stat.lisp")))
